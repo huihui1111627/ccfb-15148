@@ -40,19 +40,31 @@ func CheckAgainstBruteForce(data []byte, q *Query, opts Options) (bad, total int
 				decErr = fmt.Errorf("trailing data")
 			}
 		}
-		_, engineBad := fail[li+1]
+		engineDiag, engineBad := fail[li+1]
 		if decErr != nil {
 			if !engineBad {
 				samples = appendSample(samples, fmt.Sprintf("line %d: stdlib rejected (%v) but engine accepted: %.120q", li+1, decErr, line))
 				bad++
+				continue
+			}
+			// Compare the failure position with encoding/json's SyntaxError
+			// offset, which is 1-based. Number-range errors have no stdlib
+			// syntax offset and are skipped here.
+			if se := jsonSyntaxError(line); se != nil && engineDiag.Kind == ErrSyntax {
+				if int64(engineDiag.Col) != se.offset {
+					samples = appendSample(samples, fmt.Sprintf("line %d: error position engine %d, stdlib %d (%q): %.120q",
+						li+1, engineDiag.Col, se.offset, se.msg, line))
+					bad++
+				}
 			}
 			continue
 		}
 		if engineBad {
-			samples = appendSample(samples, fmt.Sprintf("line %d: stdlib accepted but engine rejected (%v): %.120q", li+1, fail[li+1], line))
+			samples = appendSample(samples, fmt.Sprintf("line %d: stdlib accepted but engine rejected (%v): %.120q", li+1, engineDiag, line))
 			bad++
 			continue
 		}
+
 		doc = normalizeJSONNumbers(doc)
 		for ci, p := range q.paths {
 			want, _ := bruteLookupValue(doc, p.segs)
@@ -67,6 +79,24 @@ func CheckAgainstBruteForce(data []byte, q *Query, opts Options) (bad, total int
 		}
 	}
 	return bad, total, samples, nil
+}
+
+// syntaxErr holds the offset and message of encoding/json's first syntax error
+// for a single document.
+type syntaxErr struct {
+	offset int64
+	msg    string
+}
+
+// jsonSyntaxError returns encoding/json's SyntaxError for line, or nil if the
+// input is not a syntax error (well-formed, or a type/range error).
+func jsonSyntaxError(line []byte) *syntaxErr {
+	var v interface{}
+	err := json.Unmarshal(line, &v)
+	if se, ok := err.(*json.SyntaxError); ok {
+		return &syntaxErr{offset: se.Offset, msg: se.Error()}
+	}
+	return nil
 }
 
 func appendSample(s []string, v string) []string {

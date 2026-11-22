@@ -63,7 +63,8 @@ type Column struct {
 	Path   string
 	List   bool // wildcard path: cells are JSON arrays of every match
 	Kind   valueKind
-	Mixed  bool // more than one kind appeared and unification could not resolve it
+	Mixed    bool // more than one kind appeared and unification could not resolve it
+	Conflict bool // unification was requested but a container/scalar conflict blocks it
 	Int    bool // number column whose values are all integers
 	Float  bool // number column that needs float64
 	Values []Value
@@ -351,17 +352,47 @@ func (col *Column) finalize(unify bool, t *Table) {
 	default:
 		col.Mixed = true
 		hasContainer := kinds&(1<<uint(cellObject)) != 0 || kinds&(1<<uint(cellArray)) != 0
-		if unify && !hasContainer {
-			// Coerce every present scalar to its JSON text.
-			for i := range col.Values {
-				if col.Values[i].Present {
-					col.Values[i] = scalarAsText(col.Values[i])
+		if unify {
+			if hasContainer {
+				// A container and a scalar cannot be unified: report it.
+				col.Kind = cellNull
+				col.Conflict = true
+				t.Errors = append(t.Errors, LineError{Line: firstKindLine(col), Diag: Diag{
+					Kind: ErrTypeConflict, Byte: 0, Col: 0,
+					Msg: "column " + col.Path + " mixes container and scalar values",
+				}})
+			} else {
+				// Coerce every present scalar to its JSON text.
+				for i := range col.Values {
+					if col.Values[i].Present {
+						col.Values[i] = scalarAsText(col.Values[i])
+					}
 				}
+				col.Kind = cellString
+				col.Mixed = false
 			}
-			col.Kind = cellString
-			col.Mixed = false
 		}
 	}
+}
+
+// firstKindLine returns the 1-based line of the first present value whose kind
+// differs from the column's first non-null kind. Used to anchor a conflict
+// diagnostic.
+func firstKindLine(col *Column) int {
+	var first valueKind = 255
+	for i, v := range col.Values {
+		if !v.Present {
+			continue
+		}
+		if first == 255 {
+			first = v.Kind
+			continue
+		}
+		if v.Kind != first {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // lastNewline returns the offset of the last newline not inside a string, or -1.

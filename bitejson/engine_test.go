@@ -96,3 +96,25 @@ func TestNumberRangeError(t *testing.T) {
 		t.Fatalf("range error byte %d, want 5", e.Diag.Byte)
 	}
 }
+
+// TestTypeConflictContainer checks that unifying a column that mixes a
+// container and a scalar reports a type-conflict error carrying the line.
+func TestTypeConflictContainer(t *testing.T) {
+	input := "{\"v\":{\"a\":1}}\n{\"v\":5}\n{\"v\":\"s\"}\n"
+	tab, err := Run(bytes.NewReader([]byte(input)), MustQuery("v"), Options{UnifyColumnTypes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tab.Columns[0].Conflict {
+		t.Fatalf("expected a container/scalar conflict, kind=%v mixed=%v", tab.Columns[0].Kind, tab.Columns[0].Mixed)
+	}
+	found := false
+	for _, e := range tab.Errors {
+		if e.Diag.Kind == ErrTypeConflict {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no type-conflict error reported: %v", tab.Errors)
+	}
+}
