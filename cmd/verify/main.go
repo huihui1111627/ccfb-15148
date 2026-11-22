@@ -21,6 +21,7 @@ func main() {
 	page := flag.String("page", "", "write an HTML visualiser for the first block to this file")
 	pageLines := flag.Int("page-lines", 40, "lines shown in the page")
 	strict := flag.Bool("strict-utf8", false, "reject lines with malformed UTF-8")
+	strictEsc := flag.Bool("strict-escapes", false, "report malformed \\u surrogate pairings")
 	quick := flag.Bool("quick", false, "skip the brute-force comparison")
 	flag.Parse()
 
@@ -32,7 +33,7 @@ func main() {
 		"arr[*]", "arr[*].x", "deep.very.deep.field", "meta[1].k", "flag",
 		"missing.path", "big", "sci", "unicode", "obj", "list",
 	)
-	opts := bitejson.Options{BlockSize: *blockSize, StrictUTF8: *strict}
+	opts := bitejson.Options{BlockSize: *blockSize, StrictUTF8: *strict, StrictEscapes: *strictEsc}
 
 	// Correctness: compare against brute force.
 	if !*quick {

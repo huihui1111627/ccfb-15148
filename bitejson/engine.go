@@ -19,6 +19,10 @@ type Options struct {
 	// always rejected by the parser). When false, malformed bytes are decoded
 	// as U+FFFD by the string decoder, as encoding/json does.
 	StrictUTF8 bool
+	// StrictEscapes reports malformed \u surrogate pairings (a lone or
+	// mismatched surrogate) at their position. encoding/json instead decodes
+	// them to U+FFFD; this option therefore diverges from it deliberately.
+	StrictEscapes bool
 	// BlockSize is the preferred read size for Run. Zero means 1 MiB.
 	BlockSize int
 }
@@ -202,6 +206,7 @@ func (e *Engine) processLine(ls *lineScan, res *BlockResult, li int) {
 	if !bad {
 		p := &e.parser
 		p.reset(ls, e.opts.maxDepth())
+		p.strictEscapes = e.opts.StrictEscapes
 		if !p.validate() {
 			diag = p.err
 			bad = true

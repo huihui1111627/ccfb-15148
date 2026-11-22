@@ -37,6 +37,9 @@ type parser struct {
 	max   int
 	err   Diag
 	fail  bool
+	// strictEscapes enables reporting of malformed \u surrogate escapes, which
+	// encoding/json silently turns into U+FFFD.
+	strictEscapes bool
 }
 
 func (p *parser) setErr(kind ErrorKind, at int, msg string) {
@@ -124,6 +127,15 @@ func (p *parser) skipString(i int) (int, bool) {
 					p.setErr(ErrSyntax, j+k, syntaxMsg(ls.data[j+k], `in \u hexadecimal character escape`))
 					return j, false
 				}
+			}
+			if p.strictEscapes {
+				adv, at, msg, ok := checkSurrogateEscape(ls.data, j)
+				if !ok {
+					p.setErr(ErrSyntax, at, msg)
+					return j, false
+				}
+				j += adv
+				continue
 			}
 			j += 6
 			continue
@@ -424,4 +436,27 @@ func (p *parser) reset(ls *lineScan, max int) {
 	p.fail = false
 	p.err = Diag{}
 	p.toks = p.toks[:0]
+}
+
+// checkSurrogateEscape validates the \u escape at offset j. It returns the
+// number of bytes the escape occupies (6 for a lone escape, 12 for a valid
+// surrogate pair) or, when the pairing is broken, the offending offset and a
+// message.
+func checkSurrogateEscape(data []byte, j int) (adv, at int, msg string, ok bool) {
+	r := hex4(data[j+2 : j+6])
+	switch {
+	case r >= 0xd800 && r <= 0xdbff:
+		// High surrogate: require an immediately following \uXXXX low surrogate.
+		if j+11 >= len(data) || data[j+6] != '\\' || data[j+7] != 'u' {
+			return 0, j, "unpaired high surrogate in \\u escape", false
+		}
+		r2 := hex4(data[j+8 : j+12])
+		if r2 < 0xdc00 || r2 > 0xdfff {
+			return 0, j, "invalid low surrogate after high surrogate", false
+		}
+		return 12, 0, "", true
+	case r >= 0xdc00 && r <= 0xdfff:
+		return 0, j, "unpaired low surrogate in \\u escape", false
+	}
+	return 6, 0, "", true
 }
