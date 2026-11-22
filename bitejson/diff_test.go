@@ -155,8 +155,8 @@ func TestAgainstBruteForce(t *testing.T) {
 		"missing.path", "big", "sci", "unicode", "obj", "list",
 	}
 	q := MustQuery(paths...)
-	const lines = 20000
-	corpus := generateCorpus(rng, lines)
+	corpus := generateCorpus(rng, 20000)
+	lines := bytes.Count(corpus, []byte("\n"))
 
 	table, err := Run(bytes.NewReader(corpus), q, Options{MaxDepth: 10000, BlockSize: 1 << 20})
 	if err != nil {
@@ -164,23 +164,23 @@ func TestAgainstBruteForce(t *testing.T) {
 	}
 	// Brute force each line.
 	mismatches := 0
+	start := 0
 	for li := 0; li < lines; li++ {
-		line := corpusLine(corpus, li)
+		end := bytes.IndexByte(corpus[start:], '\n')
+		line := corpus[start : start+end]
+		start += end + 1
 		var doc interface{}
 		dec := json.NewDecoder(bytes.NewReader(line))
 		dec.UseNumber()
 		decErr := dec.Decode(&doc)
 		if decErr == nil {
-			// Reject trailing content the way the engine does: a second
-			// top-level value, or anything but EOF after the first.
+			// Reject trailing content the way the engine does.
 			var extra interface{}
-			err2 := dec.Decode(&extra)
-			if err2 != io.EOF {
+			if err2 := dec.Decode(&extra); err2 != io.EOF {
 				decErr = fmt.Errorf("trailing data")
 			}
 		}
 		if decErr != nil {
-			// encoding/json rejects it: the engine must have marked it bad.
 			if !lineFailed(table, li) {
 				t.Fatalf("line %d: stdlib rejected (%v), engine accepted: %q", li, decErr, line)
 			}

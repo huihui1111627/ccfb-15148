@@ -3,6 +3,8 @@ package bitejson
 import (
 	"bufio"
 	"io"
+	"math/bits"
+	"strconv"
 )
 
 // Options configures an engine.
@@ -57,7 +59,9 @@ type Column struct {
 	Path   string
 	List   bool // wildcard path: cells are JSON arrays of every match
 	Kind   valueKind
-	Mixed  bool // more than one kind appeared (and unification is off)
+	Mixed  bool // more than one kind appeared and unification could not resolve it
+	Int    bool // number column whose values are all integers
+	Float  bool // number column that needs float64
 	Values []Value
 }
 
@@ -202,9 +206,10 @@ func (e *Engine) processLine(ls *lineScan, res *BlockResult, li int) {
 			for ci, path := range e.query.paths {
 				x.wildHit = false
 				ms, _ := x.eval(p.toks, 0, path.segs, 0, nil)
-				v, ok := e.decodeMatches(ls, path, ms, x.wildHit)
+				v, ok, where := e.decodeMatches(ls, path, ms, x.wildHit)
 				if !ok {
 					bad = true
+					diag = diagAt(ErrNumberRange, where, "number out of range for float64")
 				}
 				cells[ci] = v
 			}
@@ -223,41 +228,16 @@ func (e *Engine) processLine(ls *lineScan, res *BlockResult, li int) {
 	for ci := range cells {
 		col := res.Table.Columns[ci]
 		col.Values = append(col.Values, cells[ci])
-		mergeKind(col, cells[ci], e.opts.UnifyColumnTypes)
 	}
 }
 
-// mergeKind tracks the column's type for reporting.
-func mergeKind(col *Column, v Value, unify bool) {
-	k := v.Kind
-	if !v.Present {
-		k = cellNull
-	}
-	if len(col.Values) == 1 {
-		col.Kind = k
-		return
-	}
-	if k == cellNull {
-		return // null/missing never conflicts
-	}
-	if col.Kind == cellNull {
-		col.Kind = k
-		return
-	}
-	if col.Kind != k {
-		col.Mixed = true
-		if unify {
-			col.Kind = cellString
-		}
-	}
-}
 
 // decodeMatches turns the located matches for one path into a cell value.
-func (e *Engine) decodeMatches(ls *lineScan, path *Path, ms []match, wildHit bool) (Value, bool) {
+func (e *Engine) decodeMatches(ls *lineScan, path *Path, ms []match, wildHit bool) (Value, bool, int) {
 	if isWildcard(path) {
 		if !wildHit {
 			// The path never reached an array, so it is simply absent.
-			return Value{Present: false}, true
+			return Value{Present: false}, true, 0
 		}
 		// A reached wildcard yields a list, empty when no element matched.
 		buf := make([]byte, 0, 16)
@@ -269,29 +249,29 @@ func (e *Engine) decodeMatches(ls *lineScan, path *Path, ms []match, wildHit boo
 			buf = append(buf, ls.data[m.start:m.end]...)
 		}
 		buf = append(buf, ']')
-		return Value{Kind: cellArray, Str: string(buf), Present: true}, true
+		return Value{Kind: cellArray, Str: string(buf), Present: true}, true, 0
 	}
 	if len(ms) == 0 {
-		return Value{Present: false}, true
+		return Value{Present: false}, true, 0
 	}
 	// encoding/json map semantics: the last duplicate key wins.
 	m := ms[len(ms)-1]
 	switch m.kind {
 	case cellObject, cellArray:
-		return Value{Kind: m.kind, Str: string(ls.data[m.start:m.end]), Present: true}, true
+		return Value{Kind: m.kind, Str: string(ls.data[m.start:m.end]), Present: true}, true, 0
 	case cellString:
 		s := unquoteString(ls.data, int(m.start)+1, int(m.end)-1, nil)
-		return Value{Kind: cellString, Str: string(s), Present: true}, true
+		return Value{Kind: cellString, Str: string(s), Present: true}, true, 0
 	case cellBool:
-		return Value{Kind: cellBool, Bool: ls.data[m.start] == 't', Present: true}, true
+		return Value{Kind: cellBool, Bool: ls.data[m.start] == 't', Present: true}, true, 0
 	case cellNumber:
-		nv, ok := parseNumberValue(ls.data, int(m.start), int(m.end), false)
+		nv, ok := parseNumberValue(ls.data, int(m.start), int(m.end), true)
 		if !ok {
-			return Value{}, false
+			return Value{}, false, int(m.start)
 		}
-		return Value{Kind: cellNumber, Num: nv.f, IsInt: nv.isInt, Int64: nv.i64, Uint64: nv.u64, Present: true}, true
+		return Value{Kind: cellNumber, Num: nv.f, IsInt: nv.isInt, Int64: nv.i64, Uint64: nv.u64, Present: true}, true, 0
 	}
-	return Value{Kind: cellNull, Present: false}, true
+	return Value{Kind: cellNull, Present: false}, true, 0
 }
 
 func isWildcard(p *Path) bool {
@@ -301,6 +281,74 @@ func isWildcard(p *Path) bool {
 		}
 	}
 	return false
+}
+
+// Finalize resolves each column's type and applies the unification rules. It
+// is called by Run; callers driving the engine block by block can call it on a
+// table they assembled themselves.
+//
+// Rules, in order:
+//  1. null and absent cells never conflict; they are filled (Present stays
+//     false) and the column takes the remaining type.
+//  2. If the surviving cells share one kind, the column is that kind.
+//  3. Numbers are further unified into int/float: if every number literal is an
+//     integer that fits int64/uint64 the column is integral, otherwise float.
+//  4. Otherwise the column is Mixed. With UnifyColumnTypes set, mixed scalars
+//     are converted to their JSON text (Kind string) so the column is uniform;
+//     mixed containers and scalars remain a type conflict.
+func (t *Table) Finalize(unify bool) {
+	for _, col := range t.Columns {
+		col.finalize(unify, t)
+	}
+}
+
+func (col *Column) finalize(unify bool, t *Table) {
+	var kinds uint8
+	anyInt, anyFloat := false, false
+	for _, v := range col.Values {
+		if !v.Present {
+			continue
+		}
+		kinds |= 1 << uint(v.Kind)
+		if v.Kind == cellNumber {
+			if v.IsInt {
+				anyInt = true
+			} else {
+				anyFloat = true
+			}
+		}
+	}
+	col.Mixed = false
+	switch {
+	case kinds == 0:
+		col.Kind = cellNull
+	case kinds&(kinds-1) == 0:
+		// One kind only.
+		col.Kind = valueKind(bitsIndex8(kinds))
+		if col.Kind == cellNumber {
+			if anyInt && anyFloat {
+				col.Kind = cellNumber // still a number column; float view
+				col.Float = true
+			} else if anyFloat {
+				col.Float = true
+			} else {
+				col.Int = true
+			}
+		}
+	default:
+		col.Mixed = true
+		hasContainer := kinds&(1<<uint(cellObject)) != 0 || kinds&(1<<uint(cellArray)) != 0
+		if unify && !hasContainer {
+			// Coerce every present scalar to its JSON text.
+			for i := range col.Values {
+				if col.Values[i].Present {
+					col.Values[i] = scalarAsText(col.Values[i])
+				}
+			}
+			col.Kind = cellString
+			col.Mixed = false
+		}
+	}
 }
 
 // lastNewline returns the offset of the last newline not inside a string, or -1.
@@ -354,9 +402,6 @@ func Run(r io.Reader, q *Query, opts Options) (*Table, error) {
 		out.Errors = append(out.Errors, res.Table.Errors...)
 		for ci, col := range res.Table.Columns {
 			out.Columns[ci].Values = append(out.Columns[ci].Values, col.Values...)
-			for _, v := range col.Values {
-				mergeKind(out.Columns[ci], v, opts.UnifyColumnTypes)
-			}
 		}
 	}
 	for {
@@ -372,5 +417,34 @@ func Run(r io.Reader, q *Query, opts Options) (*Table, error) {
 		}
 	}
 	absorb(e.Flush())
+	out.Finalize(opts.UnifyColumnTypes)
 	return out, nil
+}
+
+// bitsIndex8 returns the position of the single set bit in x (x must be a
+// power of two).
+func bitsIndex8(x uint8) int { return int(bits.TrailingZeros8(x)) }
+
+// scalarAsText converts a present scalar cell to its JSON text, for type
+// unification. Strings become quoted JSON strings; containers are not handled
+// here because the caller never unifies them.
+func scalarAsText(v Value) Value {
+	switch v.Kind {
+	case cellBool:
+		if v.Bool {
+			return Value{Kind: cellString, Str: "true", Present: true}
+		}
+		return Value{Kind: cellString, Str: "false", Present: true}
+	case cellNumber:
+		if v.IsInt {
+			if v.Int64 != 0 {
+				return Value{Kind: cellString, Str: strconv.FormatInt(v.Int64, 10), Present: true}
+			}
+			return Value{Kind: cellString, Str: strconv.FormatUint(v.Uint64, 10), Present: true}
+		}
+		return Value{Kind: cellString, Str: strconv.FormatFloat(v.Num, 'g', -1, 64), Present: true}
+	case cellString:
+		return v
+	}
+	return v
 }

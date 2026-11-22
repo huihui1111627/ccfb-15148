@@ -77,20 +77,6 @@ type Value struct {
 type column struct {
 	path   *Path
 	values []Value
-	// kind is the column's resolved type after unification, valid only when
-	// uniform is true.
-	uniform bool
-	kind    valueKind
-	// raw holds the JSON text for object/array cells.
-	raw []string
+	// kindsSeen is a bitset over valueKind of every non-null value appended.
+	kindsSeen uint8
 }
-
-// columnMode controls how a path's value is produced.
-type columnMode uint8
-
-const (
-	// modeScalar yields the scalar at the path, or a list (for wildcards).
-	modeScalar columnMode = iota
-	// modeList yields a JSON array of every value matched by wildcards.
-	modeList
-)
