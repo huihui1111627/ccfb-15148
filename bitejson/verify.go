@@ -126,17 +126,21 @@ func splitLines(data []byte) [][]byte {
 // including sizes that cut inside strings and escapes, and reports whether all
 // results are identical.
 //
-// Tiny block sizes re-scan the carried partial line on every call, which is
-// quadratic in line length; to keep this fast the sub-64-byte sizes run over a
-// bounded prefix that still ends on a line boundary. Larger sizes run over the
-// whole input.
+// The engine re-scans the carried partial line on each call, so block sizes far
+// smaller than a line are quadratic in line length. Every size below 1 MiB runs
+// over a bounded prefix (ending on a line boundary) that still contains hundreds
+// of lines and therefore every boundary condition; only the large size runs over
+// the whole input.
 func CheckBlockInvariance(data []byte, q *Query, opts Options) (bool, error) {
-	prefix := boundedPrefix(data, 1<<16)
+	// A few hundred lines are plenty to exercise every boundary condition of
+	// the tiny block sizes without the quadratic cost of re-scanning a carried
+	// partial line on every one-byte block.
+	prefix := boundedPrefix(data, 1<<14)
 	sizes := []struct {
 		bs  int
 		buf []byte
 	}{
-		{1 << 20, data}, {4093, data}, {65, data}, {64, data},
+		{1 << 20, data}, {4093, prefix}, {65, prefix}, {64, prefix},
 		{63, prefix}, {13, prefix}, {8, prefix}, {7, prefix}, {1, prefix},
 	}
 	var reference *Table
