@@ -415,3 +415,13 @@ func (p *parser) array(i int) (int, bool) {
 		}
 	}
 }
+
+// reset prepares the parser to reuse its token buffer for a new line.
+func (p *parser) reset(ls *lineScan, max int) {
+	p.ls = ls
+	p.depth = 0
+	p.max = max
+	p.fail = false
+	p.err = Diag{}
+	p.toks = p.toks[:0]
+}

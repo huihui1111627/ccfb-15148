@@ -8,6 +8,7 @@ type blockMasks struct {
 	escaped []uint64
 	openQ   []uint64
 	closeQ  []uint64
+	inStr   []uint64
 	ws      []uint64
 	nl      []uint64 // '\n'
 	ctrl    []uint64 // b < 0x20
@@ -26,6 +27,7 @@ func (bm *blockMasks) slabs(n int) {
 	bm.escaped = grow(bm.escaped, k)
 	bm.openQ = grow(bm.openQ, k)
 	bm.closeQ = grow(bm.closeQ, k)
+	bm.inStr = grow(bm.inStr, k)
 	bm.ws = grow(bm.ws, k)
 	bm.nl = grow(bm.nl, k)
 	bm.ctrl = grow(bm.ctrl, k)
@@ -75,6 +77,7 @@ func (s *scanner) scanBlock(data []byte, bm *blockMasks) {
 		bm.escaped[k] = sl.esc & mask
 		bm.openQ[k] = sl.openQ & mask
 		bm.closeQ[k] = sl.closeQ & mask
+		bm.inStr[k] = sl.inStr & mask
 		bm.ws[k] = sl.ws & mask
 		bm.nl[k] = sl.nl & mask
 		bm.ctrl[k] = sl.ctrl & mask
@@ -128,33 +131,6 @@ func (ls *lineScan) firstCloseQuote(i int) int {
 		}
 		j = s * 64
 		m = ls.bm.closeQ[s]
-	}
-}
-
-// firstNewlineOutside returns the line-relative offset of the first character
-// that ends the line: an unquoted '\n'. It returns -1 if the block contains no
-// such byte.
-func (ls *lineScan) firstNewlineOutside(i int) int {
-	if i >= len(ls.data) {
-		return -1
-	}
-	j := ls.base + i
-	s := j >> 6
-	m := ls.bm.nl[s] >> uint(j&63)
-	for {
-		if m != 0 {
-			p := j + trailing(m)
-			if p-ls.base < len(ls.data) {
-				return p - ls.base
-			}
-			return -1
-		}
-		s++
-		if s >= len(ls.bm.nl) {
-			return -1
-		}
-		j = s * 64
-		m = ls.bm.nl[s]
 	}
 }
 

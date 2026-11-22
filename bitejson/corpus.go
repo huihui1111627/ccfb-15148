@@ -10,7 +10,7 @@ import (
 // across runs and Go versions.
 type corpusRand struct{ *rand.Rand }
 
-func newCorpusRand(seed int64) *corpusRand { return &corpusRand{rand.New(rand.NewSource(seed))} }
+func NewCorpusRand(seed int64) *corpusRand { return &corpusRand{rand.New(rand.NewSource(seed))} }
 
 func (r *corpusRand) pick(n int) int { return r.Intn(n) }
 
@@ -221,6 +221,10 @@ func corrupt(r *corpusRand, b []byte) []byte {
 }
 
 // generateCorpus produces n newline-terminated lines.
+func GenerateCorpus(seed int64, n int) []byte {
+	return generateCorpus(NewCorpusRand(seed), n)
+}
+
 func generateCorpus(r *corpusRand, n int) []byte {
 	buf := make([]byte, 0, n*256)
 	for i := 0; i < n; i++ {
@@ -253,4 +257,26 @@ func indexNewline(b []byte, from int) int {
 		}
 	}
 	return -1
+}
+
+// DemoInput is a small, human-scale newline-delimited sample designed to
+// exercise every visible feature of the visualiser: nested objects and arrays,
+// escapes, Unicode, a long-ish string, array wildcards, duplicate keys, a
+// missing field, and two deliberately broken lines.
+func DemoInput() []byte {
+	lines := []string{
+		`{"id":101,"name":"hoist-1","value":-12.5,"flag":true,"arr":[10,20,30,40],"nested":{"a":"x","b":{"c":"deep"}},"unicode":"钢丝绳 é 😀"}`,
+		`{"name":"hoist-2","id":102,"value":7,"arr":[1,2],"nested":{"a":"y\"z","b":{"c":"tab\there"}},"flag":false,"sci":1.5e3}`,
+		`{"id":103,"arr":[{"x":"first"},{"x":"second"},{"y":"no-x"}],"nested":{"b":{"c":null}},"list":[true,false,null],"deep":{"very":{"deep":"found"}}}`,
+		`{"name":"broken","id":104,"arr":[1,2,3],`,
+		`{"id":105,"name":"escapes","unicode":"中文 😀","obj":{"k":"v"},"value":0.001,"missing":null}`,
+		`{"id":106,"arr":[],"nested":{"a":{"b":{"c":123}}},"flag":true,"big":12345678901234567890}`,
+		`{"id":107,"name":"bad-escape","unicode":"\q","arr":[5]}`,
+	}
+	buf := make([]byte, 0, 1024)
+	for _, l := range lines {
+		buf = append(buf, l...)
+		buf = append(buf, '\n')
+	}
+	return buf
 }

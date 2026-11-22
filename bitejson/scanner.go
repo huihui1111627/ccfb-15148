@@ -35,12 +35,7 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 	)
 	prevEsc := s.prevEscaped
 	prevIn := s.prevInStr
-	// A slab containing a newline cannot use the vectorised per-word carry:
-	// the carry must reset mid-word at the newline. Fall back to a scalar pass
-	// over the whole slab; this happens at most once per line.
-	if slabHasNewline(b) {
-		return s.scanSlabScalar(b)
-	}
+	savedEsc, savedIn := prevEsc, prevIn
 	for k := 0; k < 8; k++ {
 		w := loadWord(b[k*8:])
 		c := classifyWord(w)
@@ -66,6 +61,13 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 		sl.nStr += popcount(oq)
 		prevEsc, prevIn = nextEsc, nextIn
 	}
+	if nl != 0 {
+		// The slab contained a line boundary. The vectorised per-word carry
+		// cannot reset mid-word, so redo this slab scalar with the carries from
+		// before it. This happens once per line.
+		s.prevEscaped, s.prevInStr = savedEsc, savedIn
+		return s.scanSlabScalar(b)
+	}
 	s.prevEscaped, s.prevInStr = prevEsc, prevIn
 	sl.quote = quote
 	sl.bslash = bslash
@@ -84,16 +86,6 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 	return
 }
 
-// slabHasNewline reports whether any of the 64 bytes contains a '\n'.
-func slabHasNewline(b []byte) bool {
-	for k := 0; k < 8; k++ {
-		if byteEq(loadWord(b[k*8:]), '\n') != 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // scanSlabScalar classifies 64 bytes byte by byte. It is used for slabs that
 // contain a line boundary, where the escape and string carries must reset at
 // the newline; a correct scalar pass is simpler than splitting the vector
@@ -110,9 +102,16 @@ func (s *scanner) scanSlabScalar(b []byte) (sl slab) {
 		bit := uint64(1) << uint(j)
 		if prevEsc&1 != 0 {
 			// This byte is consumed by the previous backslash. It is escaped
-			// even if it is a quote, and it is part of the string body.
+			// even if it is a quote, and it is part of the string body. The
+			// quote mask records all quote bytes, escaped ones included.
 			sl.esc |= bit
 			prevEsc = 0
+			if bb == '"' {
+				sl.quote |= bit
+			}
+			if bb == '\\' {
+				sl.bslash |= bit
+			}
 			if prevIn&1 != 0 {
 				sl.inStr |= bit
 			}

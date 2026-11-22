@@ -89,7 +89,10 @@ type Engine struct {
 	query   *Query
 	sc      scanner
 	carry   []byte
-	nextLno int // 1-based number of the next line to be emitted
+	nextLno int       // 1-based number of the next line to be emitted
+	parser  parser    // reused per line; token buffer is kept for capacity
+	values  []Value   // scratch for the current line's cells
+	scratch []byte    // scratch for unquoting
 }
 
 // NewEngine builds an engine for q.
@@ -196,13 +199,17 @@ func (e *Engine) processLine(ls *lineScan, res *BlockResult, li int) {
 		}
 	}
 	if !bad {
-		p := &parser{ls: ls, max: e.opts.maxDepth()}
+		p := &e.parser
+		p.reset(ls, e.opts.maxDepth())
 		if !p.validate() {
 			diag = p.err
 			bad = true
 		} else {
-			cells = make([]Value, n)
-			x := &extractor{data: ls.data}
+			if cap(e.values) < n {
+				e.values = make([]Value, n)
+			}
+			cells = e.values[:n]
+			x := &extractor{data: ls.data, scratch: e.scratch[:0]}
 			for ci, path := range e.query.paths {
 				x.wildHit = false
 				ms, _ := x.eval(p.toks, 0, path.segs, 0, nil)
@@ -260,8 +267,8 @@ func (e *Engine) decodeMatches(ls *lineScan, path *Path, ms []match, wildHit boo
 	case cellObject, cellArray:
 		return Value{Kind: m.kind, Str: string(ls.data[m.start:m.end]), Present: true}, true, 0
 	case cellString:
-		s := unquoteString(ls.data, int(m.start)+1, int(m.end)-1, nil)
-		return Value{Kind: cellString, Str: string(s), Present: true}, true, 0
+		e.scratch = unquoteString(ls.data, int(m.start)+1, int(m.end)-1, e.scratch[:0])
+		return Value{Kind: cellString, Str: string(e.scratch), Present: true}, true, 0
 	case cellBool:
 		return Value{Kind: cellBool, Bool: ls.data[m.start] == 't', Present: true}, true, 0
 	case cellNumber:

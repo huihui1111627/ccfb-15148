@@ -171,29 +171,41 @@ type numNorm struct {
 }
 
 // parseNumberValue parses a JSON number literal. If strictFloat is set and the
-// value overflows float64, it returns ok=false.
+// value overflows float64, it returns ok=false. The common cases (small
+// integers, ordinary decimals) avoid allocation by scanning bytes directly;
+// only large or exponential literals fall back to strconv.
 func parseNumberValue(raw []byte, start, end int, strictFloat bool) (numNorm, bool) {
 	s := raw[start:end]
 	var n numNorm
+	neg := false
+	i := 0
+	if i < len(s) && s[i] == '-' {
+		neg = true
+		i++
+	}
+	// Fast path: integer with no fraction or exponent that fits comfortably.
 	if !hasFloatSyntax(s) {
-		// Integer literal: parse exactly, which also lets out-of-range integers
-		// be reported rather than silently rounded.
-		if len(s) > 0 && s[0] == '-' {
-			if v, err := strconv.ParseInt(string(s), 10, 64); err == nil {
-				n.isInt = true
-				n.i64 = v
-				n.f = float64(v)
-				return n, true
-			}
-		} else {
-			if v, err := strconv.ParseUint(string(s), 10, 64); err == nil {
-				n.isInt = true
+		if v, ok := fastUint(s[i:]); ok {
+			n.isInt = true
+			if neg {
+				n.i64 = -int64(v)
+				n.f = -float64(v)
+			} else {
 				n.u64 = v
 				n.f = float64(v)
+			}
+			return n, true
+		}
+		// Fall back to strconv for integers at the edge of the range.
+		if neg {
+			if v, err := strconv.ParseInt(string(s), 10, 64); err == nil {
+				n.isInt, n.i64, n.f = true, v, float64(v)
 				return n, true
 			}
+		} else if v, err := strconv.ParseUint(string(s), 10, 64); err == nil {
+			n.isInt, n.u64, n.f = true, v, float64(v)
+			return n, true
 		}
-		// Integer too large for int64/uint64: fall through to float.
 	}
 	f, err := strconv.ParseFloat(string(s), 64)
 	if err != nil && strictFloat {
@@ -204,6 +216,21 @@ func parseNumberValue(raw []byte, start, end int, strictFloat bool) (numNorm, bo
 		n.negZero = true
 	}
 	return n, true
+}
+
+// fastUint parses up to 18 decimal digits into a uint64 without allocation.
+func fastUint(d []byte) (uint64, bool) {
+	if len(d) == 0 || len(d) > 18 {
+		return 0, false
+	}
+	var v uint64
+	for _, c := range d {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		v = v*10 + uint64(c-'0')
+	}
+	return v, true
 }
 
 // hasFloatSyntax reports whether s contains '.', 'e' or 'E'.

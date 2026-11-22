@@ -94,10 +94,12 @@ type extractor struct {
 func (x *extractor) keyEquals(k token, name string) bool {
 	body := x.data[k.start:k.end]
 	if !hasEscape(body) {
-		return string(body) == name
+		// Compare bytes to string directly; the compiler does not allocate for
+		// this comparison.
+		return len(body) == len(name) && string(body) == name
 	}
 	x.scratch = unquoteString(x.data, int(k.start), int(k.end), x.scratch[:0])
-	return string(x.scratch) == name
+	return len(x.scratch) == len(name) && string(x.scratch) == name
 }
 
 func hasEscape(b []byte) bool {

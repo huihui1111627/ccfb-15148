@@ -9,87 +9,17 @@ import (
 // different sizes, including sizes that cut in the middle of strings, escapes,
 // multi-byte characters and backslash runs, yields identical tables.
 func TestBlockInvariance(t *testing.T) {
-	rng := newCorpusRand(999)
-	corpus := generateCorpus(rng, 1200)
+	corpus := GenerateCorpus(999, 1200)
 	q := MustQuery("id", "name", "arr[*]", "nested.b.c", "unicode", "deep.very.deep")
-
-	reference, err := Run(bytes.NewReader(corpus), q, Options{BlockSize: 1 << 20})
+	ok, err := CheckBlockInvariance(corpus, q, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	for _, bs := range []int{1, 7, 8, 13, 63, 64, 65, 4093} {
-		got := runBlocks(t, corpus, q, bs)
-		if got.Lines != reference.Lines || got.Bad != reference.Bad {
-			t.Fatalf("block size %d: lines %d/%d bad %d/%d", bs, got.Lines, reference.Lines, got.Bad, reference.Bad)
-		}
-		for ci := range reference.Columns {
-			a, b := reference.Columns[ci], got.Columns[ci]
-			if len(a.Values) != len(b.Values) {
-				t.Fatalf("block size %d column %q: %d vs %d values", bs, a.Path, len(a.Values), len(b.Values))
-			}
-			for li := range a.Values {
-				if !valuesEqual(a.Values[li], b.Values[li]) {
-					t.Fatalf("block size %d column %q line %d: %+v vs %+v", bs, a.Path, li, a.Values[li], b.Values[li])
-				}
-			}
-		}
-		if len(got.Errors) != len(reference.Errors) {
-			t.Fatalf("block size %d: %d errors vs %d", bs, len(got.Errors), len(reference.Errors))
-		}
-		for i := range got.Errors {
-			if got.Errors[i] != reference.Errors[i] {
-				t.Fatalf("block size %d error %d: %v vs %v", bs, i, got.Errors[i], reference.Errors[i])
-			}
-		}
+	if !ok {
+		t.Fatal("block invariance failed")
 	}
 }
 
-func valuesEqual(a, b Value) bool {
-	if a.Kind != b.Kind || a.Present != b.Present {
-		return false
-	}
-	switch a.Kind {
-	case cellString, cellObject, cellArray:
-		return a.Str == b.Str
-	case cellNumber:
-		return a.Num == b.Num && a.IsInt == b.IsInt && a.Int64 == b.Int64 && a.Uint64 == b.Uint64
-	case cellBool:
-		return a.Bool == b.Bool
-	}
-	return true
-}
-
-// runBlocks drives the engine manually with fixed-size chunks.
-func runBlocks(t *testing.T, corpus []byte, q *Query, bs int) *Table {
-	t.Helper()
-	e := NewEngine(q, Options{})
-	out := &Table{Columns: make([]*Column, len(q.paths))}
-	for ci, p := range q.paths {
-		out.Columns[ci] = &Column{Path: p.raw, List: isWildcard(p)}
-	}
-	absorb := func(res *BlockResult) {
-		if res == nil {
-			return
-		}
-		out.Lines += res.Table.Lines
-		out.Bad += res.Table.Bad
-		out.Errors = append(out.Errors, res.Table.Errors...)
-		for ci, col := range res.Table.Columns {
-			out.Columns[ci].Values = append(out.Columns[ci].Values, col.Values...)
-		}
-	}
-	for off := 0; off < len(corpus); off += bs {
-		end := off + bs
-		if end > len(corpus) {
-			end = len(corpus)
-		}
-		absorb(e.ProcessBlock(corpus[off:end]))
-	}
-	absorb(e.Flush())
-	out.Finalize(false)
-	return out
-}
 
 // TestTypeUnification exercises the documented column type rules.
 func TestTypeUnification(t *testing.T) {

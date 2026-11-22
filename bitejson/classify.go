@@ -133,3 +133,83 @@ func loadWord(b []byte) uint64 {
 	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
 		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 }
+
+// classifyNaive is the byte-at-a-time reference classifier: the same masks as
+// the SWAR pipeline, computed one byte at a time. It is the honest baseline for
+// the speed comparison and a cross-check for the vectorised path.
+func classifyNaive(data []byte, bm *blockMasks) {
+	n := len(data)
+	bm.slabs(n)
+	var prevEsc, inStr bool
+	for i := 0; i < n; i++ {
+		b := data[i]
+		if b == '\n' {
+			prevEsc, inStr = false, false
+		}
+		s := i >> 6
+		bit := uint64(1) << uint(i&63)
+
+		if prevEsc {
+			// The byte is escaped: it is consumed by the backslash. It still
+			// counts as a raw quote in the quote mask (the SWAR pass records
+			// all quote bytes and removes escaped ones later).
+			prevEsc = false
+			bm.escaped[s] |= bit
+			if b == '"' {
+				bm.quote[s] |= bit
+			}
+			if b == '\\' {
+				bm.bslash[s] |= bit
+			}
+			if inStr {
+				bm.inStr[s] |= bit
+			}
+			if b < 0x20 {
+				bm.ctrl[s] |= bit
+			}
+			if b >= 0x80 {
+				bm.nonAsc[s] |= bit
+			}
+			continue
+		}
+		if b == '"' {
+			bm.quote[s] |= bit
+			if inStr {
+				bm.inStr[s] |= bit
+				bm.closeQ[s] |= bit
+				inStr = false
+			} else {
+				bm.openQ[s] |= bit
+				inStr = true
+			}
+			continue
+		}
+		if inStr {
+			bm.inStr[s] |= bit
+		}
+		switch b {
+		case '\\':
+			bm.bslash[s] |= bit
+			prevEsc = true
+		case '{', '[':
+			bm.open[s] |= bit
+		case '}', ']':
+			bm.close[s] |= bit
+		case ':':
+			bm.colon[s] |= bit
+		case ',':
+			bm.comma[s] |= bit
+		case ' ', '\t', '\r':
+			bm.ws[s] |= bit
+		}
+		if b == '\n' {
+			bm.nl[s] |= bit
+		}
+		if b < 0x20 {
+			bm.ctrl[s] |= bit
+		}
+		if b >= 0x80 {
+			bm.nonAsc[s] |= bit
+		}
+	}
+}
