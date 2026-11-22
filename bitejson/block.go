@@ -62,9 +62,14 @@ func (s *scanner) scanBlock(data []byte, bm *blockMasks) {
 	n := len(data)
 	bm.slabs(n)
 	for off := 0; off < n; off += 64 {
-		var buf [64]byte
-		copy(buf[:], data[off:])
-		sl := s.scanSlab(buf[:])
+		var sl slab
+		if off+64 <= n {
+			sl = s.scanSlab(data[off : off+64])
+		} else {
+			var buf [64]byte
+			copy(buf[:], data[off:])
+			sl = s.scanSlab(buf[:])
+		}
 		k := off / 64
 		mask := ^uint64(0)
 		if rem := n - off; rem < 64 {

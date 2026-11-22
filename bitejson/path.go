@@ -75,11 +75,17 @@ func ParsePath(s string) (*Path, error) {
 			expectKey = false
 			i = j + 1
 		case c == '"' || c == '\'':
-			// quoted key: read to matching quote
+			// Quoted key: read to the matching quote, honouring backslash
+			// escapes so a key may contain the quote character itself.
 			q := c
 			j := i + 1
 			var key []byte
 			for j < len(s) && s[j] != q {
+				if s[j] == '\\' && j+1 < len(s) {
+					key = append(key, s[j+1])
+					j += 2
+					continue
+				}
 				key = append(key, s[j])
 				j++
 			}

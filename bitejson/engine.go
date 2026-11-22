@@ -91,13 +91,14 @@ type Engine struct {
 	carry   []byte
 	nextLno int       // 1-based number of the next line to be emitted
 	parser  parser    // reused per line; token buffer is kept for capacity
+	matcher *matcher
 	values  []Value   // scratch for the current line's cells
 	scratch []byte    // scratch for unquoting
 }
 
 // NewEngine builds an engine for q.
 func NewEngine(q *Query, opts Options) *Engine {
-	return &Engine{opts: opts, query: q, nextLno: 1}
+	return &Engine{opts: opts, query: q, nextLno: 1, matcher: buildMatcher(q)}
 }
 
 // ProcessBlock consumes one block. Complete lines are returned now; the
@@ -210,10 +211,10 @@ func (e *Engine) processLine(ls *lineScan, res *BlockResult, li int) {
 			}
 			cells = e.values[:n]
 			x := &extractor{data: ls.data, scratch: e.scratch[:0]}
+			e.matcher.reset(n)
+			e.matcher.run(x, p.toks, 0)
 			for ci, path := range e.query.paths {
-				x.wildHit = false
-				ms, _ := x.eval(p.toks, 0, path.segs, 0, nil)
-				v, ok, where := e.decodeMatches(ls, path, ms, x.wildHit)
+				v, ok, where := e.decodeMatches(ls, path, e.matcher.out[ci], e.matcher.wildHit[ci])
 				if !ok {
 					bad = true
 					diag = diagAt(ErrNumberRange, where, "number out of range for float64")
