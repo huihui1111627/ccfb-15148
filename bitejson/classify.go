@@ -16,6 +16,8 @@ type wordClass struct {
 	commaHi  uint64 // b == ','
 	ctrlHi   uint64 // b < 0x20
 	nonAscHi uint64 // b >= 0x80
+	wsHi     uint64 // b is ' ', '\t' or '\r'
+	nlHi     uint64 // b == '\n'
 
 	quote  uint64
 	bslash uint64
@@ -24,6 +26,8 @@ type wordClass struct {
 	colon  uint64
 	comma  uint64
 	ctrl   uint64 // b < 0x20
+	ws     uint64 // ' ', '\t', '\r'
+	nl     uint64 // '\n'
 }
 
 // classifyWord fills the class masks for the eight bytes of w. It performs no
@@ -37,6 +41,8 @@ func classifyWord(w uint64) (c wordClass) {
 	c.commaHi = byteEq(w, ',')
 	c.ctrlHi = byteLt(w, 0x20)
 	c.nonAscHi = w & hiBits
+	c.wsHi = byteEq(w, ' ') | byteEq(w, '\t') | byteEq(w, '\r')
+	c.nlHi = byteEq(w, '\n')
 
 	c.quote = compress(c.quoteHi)
 	c.bslash = compress(c.bslashHi)
@@ -45,6 +51,7 @@ func classifyWord(w uint64) (c wordClass) {
 	c.colon = compress(c.colonHi)
 	c.comma = compress(c.commaHi)
 	c.ctrl = compress(c.ctrlHi)
+	c.nl = compress(c.nlHi)
 	return
 }
 
@@ -97,6 +104,8 @@ type slab struct {
 	colon  uint64
 	comma  uint64
 	ctrl   uint64
+	ws     uint64 // ' ', '\t', '\r'
+	nl     uint64 // '\n'
 	esc    uint64
 	inStr  uint64
 	openQ  uint64

@@ -25,6 +25,8 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 		colon  uint64
 		comma  uint64
 		ctrl   uint64
+		ws     uint64
+		nl     uint64
 		esc    uint64
 		inStr  uint64
 		openQ  uint64
@@ -47,6 +49,8 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 		colon |= c.colon << (k * 8)
 		comma |= c.comma << (k * 8)
 		ctrl |= c.ctrl << (k * 8)
+		ws |= compress(c.wsHi) << (k * 8)
+		nl |= c.nl << (k * 8)
 		esc |= e << (k * 8)
 		inStr |= is << (k * 8)
 		openQ |= oq << (k * 8)
@@ -64,6 +68,8 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 	sl.colon = colon
 	sl.comma = comma
 	sl.ctrl = ctrl
+	sl.ws = ws
+	sl.nl = nl
 	sl.esc = esc
 	sl.inStr = inStr
 	sl.openQ = openQ
