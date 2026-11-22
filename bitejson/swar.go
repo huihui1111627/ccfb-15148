@@ -65,3 +65,7 @@ func trailing(x uint64) int { return bits.TrailingZeros64(x) }
 
 // lowClear clears the lowest set bit.
 func lowClear(x uint64) uint64 { return x & (x - 1) }
+
+// leadingZeros returns the number of zero bits above the highest set bit of x,
+// which must be non-zero.
+func leadingZeros(x uint64) int { return 63 - bits.Len64(x) + 1 }

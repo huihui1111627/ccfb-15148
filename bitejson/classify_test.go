@@ -18,6 +18,12 @@ func refClassify(data []byte) (esc, inStr, openQ, closeQ []bool) {
 	inside := false
 	prevUnescBslash := false
 	for i, b := range data {
+		// A raw newline is never inside a valid JSON string: reset the carries
+		// before classifying it so a broken line cannot affect the next.
+		if b == '\n' {
+			inside = false
+			prevUnescBslash = false
+		}
 		if prevUnescBslash {
 			esc[i] = true
 		}
@@ -105,6 +111,33 @@ func TestClassifyAgainstReference(t *testing.T) {
 			if we[i] != ge[i] || wi[i] != gi[i] || wo[i] != go_[i] || wc[i] != gc[i] {
 				t.Fatalf("trial %d byte %d (%q) mismatch: esc %v/%v inStr %v/%v open %v/%v close %v/%v\nbuf=%q",
 					trial, i, buf[i], we[i], ge[i], wi[i], gi[i], wo[i], go_[i], wc[i], gc[i], buf)
+			}
+		}
+	}
+}
+
+// TestNewlineResync checks that a broken line (unterminated string, dangling
+// backslash) cannot affect the classification of the following lines, and that
+// the scalar and vector paths agree wherever newlines appear.
+func TestNewlineResync(t *testing.T) {
+	lines := [][]byte{
+		[]byte(`{"a":"unterminated`),
+		[]byte(`{"a":1} trailing \`),
+		[]byte(`{"a":"x\`),
+		[]byte(`{"ok":"` + `"}"}"`),
+		[]byte(`{"a":"`),
+		[]byte(`}`),
+	}
+	for _, a := range lines {
+		for _, b := range lines {
+			data := append(append(append([]byte{}, a...), '\n'), b...)
+			we, wi, wo, wc := refClassify(data)
+			ge, gi, go_, gc := scanClassify(data)
+			for i := range data {
+				if we[i] != ge[i] || wi[i] != gi[i] || wo[i] != go_[i] || wc[i] != gc[i] {
+					t.Fatalf("pair %q + %q byte %d: esc %v/%v inStr %v/%v open %v/%v close %v/%v",
+						a, b, i, we[i], ge[i], wi[i], gi[i], wo[i], go_[i], wc[i], gc[i])
+				}
 			}
 		}
 	}

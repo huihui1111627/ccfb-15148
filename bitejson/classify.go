@@ -95,6 +95,19 @@ func resolveStrings(quotes, inStrIn uint64) (inStr, openQ, closeQ, inStrOut uint
 	return
 }
 
+// resolveStringByte resolves string state for a single byte (bit 0 of quote).
+// The scanner uses it on words containing a newline, where the carry must be
+// reset at that byte; inStrOut is then the state after just this byte.
+func resolveStringByte(isQuote, inStrIn uint64) (inStr, openQ, closeQ, inStrOut uint64) {
+	if isQuote&1 != 0 {
+		if inStrIn&1 != 0 {
+			return 1, 0, 1, 0
+		}
+		return 0, 1, 0, 1
+	}
+	return inStrIn & 1, 0, 0, inStrIn & 1
+}
+
 // slab is one 64-byte group's masks after escape and string resolution.
 type slab struct {
 	quote  uint64 // all quote bytes (escaped quotes included)

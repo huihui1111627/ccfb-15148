@@ -35,6 +35,12 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 	)
 	prevEsc := s.prevEscaped
 	prevIn := s.prevInStr
+	// A slab containing a newline cannot use the vectorised per-word carry:
+	// the carry must reset mid-word at the newline. Fall back to a scalar pass
+	// over the whole slab; this happens at most once per line.
+	if slabHasNewline(b) {
+		return s.scanSlabScalar(b)
+	}
 	for k := 0; k < 8; k++ {
 		w := loadWord(b[k*8:])
 		c := classifyWord(w)
@@ -75,5 +81,83 @@ func (s *scanner) scanSlab(b []byte) (sl slab) {
 	sl.openQ = openQ
 	sl.closeQ = closeQ
 	sl.nonAsc = nonAsc
+	return
+}
+
+// slabHasNewline reports whether any of the 64 bytes contains a '\n'.
+func slabHasNewline(b []byte) bool {
+	for k := 0; k < 8; k++ {
+		if byteEq(loadWord(b[k*8:]), '\n') != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// scanSlabScalar classifies 64 bytes byte by byte. It is used for slabs that
+// contain a line boundary, where the escape and string carries must reset at
+// the newline; a correct scalar pass is simpler than splitting the vector
+// carries around a mid-word reset.
+func (s *scanner) scanSlabScalar(b []byte) (sl slab) {
+	// p is the 64-byte padded slab; s.scanBlock masks off padding afterwards.
+	prevEsc := s.prevEscaped
+	prevIn := s.prevInStr
+	for j := 0; j < 64; j++ {
+		bb := b[j]
+		if bb == '\n' {
+			prevEsc, prevIn = 0, 0
+		}
+		bit := uint64(1) << uint(j)
+		if prevEsc&1 != 0 {
+			// This byte is consumed by the previous backslash. It is escaped
+			// even if it is a quote, and it is part of the string body.
+			sl.esc |= bit
+			prevEsc = 0
+			if prevIn&1 != 0 {
+				sl.inStr |= bit
+			}
+			continue
+		}
+		if bb == '"' {
+			sl.quote |= bit
+			if prevIn&1 != 0 {
+				sl.inStr |= bit
+				sl.closeQ |= bit
+				prevIn = 0
+			} else {
+				sl.openQ |= bit
+				sl.nStr++
+				prevIn = 1
+			}
+			continue
+		}
+		if prevIn&1 != 0 {
+			sl.inStr |= bit
+		}
+		switch bb {
+		case '\\':
+			sl.bslash |= bit
+			prevEsc = 1
+		case '{', '[':
+			sl.open |= bit
+		case '}', ']':
+			sl.close |= bit
+		case ':':
+			sl.colon |= bit
+		case ',':
+			sl.comma |= bit
+		case ' ', '\t', '\r':
+			sl.ws |= bit
+		case '\n':
+			sl.nl |= bit
+		}
+		if bb < 0x20 {
+			sl.ctrl |= bit
+		}
+		if bb >= 0x80 {
+			sl.nonAsc |= bit
+		}
+	}
+	s.prevEscaped, s.prevInStr = prevEsc, prevIn
 	return
 }
